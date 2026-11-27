@@ -9,17 +9,9 @@ import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.LinearLayout;
 import android.widget.TextView;
-import com.yandex.mobile.ads.appopenad.AppOpenAd;
-import com.yandex.mobile.ads.appopenad.AppOpenAdEventListener;
-import com.yandex.mobile.ads.banner.BannerAdSize;
-import com.yandex.mobile.ads.banner.BannerAdView;
-import com.yandex.mobile.ads.common.AdError;
-import com.yandex.mobile.ads.common.AdRequest;
-import com.yandex.mobile.ads.common.InitCompletionListener;
-import com.yandex.mobile.ads.common.MobileAds;
-import com.yandex.mobile.ads.rewarded.Reward;
-import com.yandex.mobile.ads.rewarded.RewardedAd;
-import com.yandex.mobile.ads.rewarded.RewardedAdEventListener;
+import java.lang.reflect.InvocationHandler;
+import java.lang.reflect.Method;
+import java.lang.reflect.Proxy;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
@@ -27,10 +19,10 @@ import java.util.Locale;
 public class MainActivity extends Activity {
     private WebView web;
     private LinearLayout root;
-    private BannerAdView banner;
-    private AppOpenAd appOpen;
+    private Object banner;
+    private Object appOpen;
     private long appOpenLoadTime;
-    private RewardedAd rewarded;
+    private Object rewarded;
     private boolean htmlConsent;
     private boolean adsStarted;
     private boolean firstResume = true;
@@ -39,6 +31,41 @@ public class MainActivity extends Activity {
     static final String BANNER_ID = "demo-banner-yandex";
     static final String APP_OPEN_ID = "demo-appopenad-yandex";
     static final String REWARDED_ID = "demo-rewarded-yandex";
+
+    private static Class<?> C(String n) {
+        try { return Class.forName(n); } catch (Throwable t) { return null; }
+    }
+    private static Object invoke(Object t, String name, Object... args) {
+        if (t == null) return null;
+        for (Method m : t.getClass().getMethods()) {
+            if (m.getName().equals(name) && m.getParameterTypes().length == args.length) {
+                try { return m.invoke(t, args); } catch (Throwable e) { return null; }
+            }
+        }
+        return null;
+    }
+    private static Object staticInvoke(Class<?> c, String name, Object... args) {
+        if (c == null) return null;
+        for (Method m : c.getMethods()) {
+            if (m.getName().equals(name) && m.getParameterTypes().length == args.length) {
+                try { return m.invoke(null, args); } catch (Throwable e) { return null; }
+            }
+        }
+        return null;
+    }
+    private static Object construct(Class<?> c, Object... args) {
+        if (c == null) return null;
+        try {
+            for (java.lang.reflect.Constructor<?> k : c.getConstructors()) {
+                if (k.getParameterTypes().length == args.length) return k.newInstance(args);
+            }
+        } catch (Throwable e) { }
+        return null;
+    }
+    private Object adRequest() {
+        Object b = construct(C("com.yandex.mobile.ads.common.AdRequest$Builder"));
+        return invoke(b, "build");
+    }
 
     @Override
     protected void onCreate(Bundle b) {
@@ -67,120 +94,112 @@ public class MainActivity extends Activity {
         if (htmlConsent) startAds();
     }
 
-    private boolean adFree() {
-        return sp.getLong("af", 0) > System.currentTimeMillis();
-    }
-
-    private int dp(int v) {
-        return (int) (v * getResources().getDisplayMetrics().density);
-    }
+    private boolean adFree() { return sp.getLong("af", 0) > System.currentTimeMillis(); }
+    private int dp(int v) { return (int) (v * getResources().getDisplayMetrics().density); }
 
     private void startAds() {
         if (adsStarted || !htmlConsent) return;
         adsStarted = true;
-        MobileAds.initialize(this, new InitCompletionListener() {
-            @Override
-            public void onInitializationCompleted() {
-                runOnUiThread(new Runnable() {
-                    @Override
-                    public void run() {
-                        setContentView(root);
-                        ensureBanner();
-                        loadAppOpen();
-                        loadRewarded();
-                        web.postDelayed(new Runnable() {
-                            @Override
-                            public void run() {
-                                tryAppOpen();
-                            }
-                        }, 700);
-                    }
+        Class<?> ma = C("com.yandex.mobile.ads.common.MobileAds");
+        Class<?> initListener = C("com.yandex.mobile.ads.common.InitCompletionListener");
+        boolean initialized = false;
+        if (ma != null && initListener != null) {
+            Object proxy = Proxy.newProxyInstance(initListener.getClassLoader(),
+                new Class<?>[]{initListener}, new InvocationHandler() {
+                    @Override public Object invoke(Object p, Method m, Object[] a) { return null; }
                 });
+            initialized = staticInvoke(ma, "initialize", this, proxy) != null || true;
+        }
+        if (!initialized) staticInvoke(ma, "initialize", this);
+        final android.os.Handler h = new android.os.Handler(getMainLooper());
+        h.postDelayed(new Runnable() {
+            @Override public void run() {
+                setContentView(root);
+                ensureBanner();
+                loadAppOpen();
+                loadRewarded();
+                web.evaluateJavascript(
+                    "toast('Реклама: баннер=" + (banner != null) + ", open=" + (appOpen != null) + ", rewarded=" + (rewarded != null) + "')", null);
+                h.postDelayed(new Runnable() {
+                    @Override public void run() { tryAppOpen(); }
+                }, 700);
             }
-        });
+        }, 1500);
     }
 
     private void ensureBanner() {
         if (!adsStarted || adFree() || banner != null) return;
-        banner = new BannerAdView(this);
-        banner.setAdUnitId(BANNER_ID);
-        banner.setAdSize(BannerAdSize.stickyWidth(this));
-        banner.loadAd(new AdRequest.Builder().build());
+        banner = construct(C("com.yandex.mobile.ads.banner.BannerAdView"), this);
+        if (banner == null) return;
+        invoke(banner, "setAdUnitId", BANNER_ID);
+        Object size = staticInvoke(C("com.yandex.mobile.ads.banner.BannerAdSize"), "stickyWidth", this);
+        if (size != null) invoke(banner, "setAdSize", size);
+        invoke(banner, "loadAd", adRequest());
         LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, -2);
         p.topMargin = dp(8);
-        root.addView(banner, p);
+        root.addView((android.view.View) banner, p);
     }
-
     private void removeBanner() {
         if (banner != null) {
-            banner.destroy();
-            root.removeView(banner);
+            invoke(banner, "destroy");
+            root.removeView((android.view.View) banner);
             banner = null;
         }
     }
 
     private void loadAppOpen() {
-        appOpen = new AppOpenAd(this);
-        appOpen.setAdUnitId(APP_OPEN_ID);
-        appOpen.setAdEventListener(new AppOpenAdEventListener() {
-            @Override public void onAdShown() {}
-            @Override public void onAdFailedToLoad(AdError e) {}
-            @Override public void onAdDismissed() { loadAppOpen(); }
-            @Override public void onAdClicked() {}
-            @Override public void onAdImpression() {}
-        });
-        appOpen.loadAd(new AdRequest.Builder().build());
+        appOpen = construct(C("com.yandex.mobile.ads.appopenad.AppOpenAd"), this);
+        if (appOpen == null) return;
+        invoke(appOpen, "setAdUnitId", APP_OPEN_ID);
+        invoke(appOpen, "loadAd", adRequest());
         appOpenLoadTime = System.currentTimeMillis();
     }
-
     private void tryAppOpen() {
         if (!adsStarted || adFree() || appOpen == null) return;
         long now = System.currentTimeMillis();
-        if (now - appOpenLoadTime > 4 * 3600_000L) {
-            appOpen = null;
-            loadAppOpen();
-            return;
-        }
+        if (now - appOpenLoadTime > 4 * 3600_000L) { appOpen = null; loadAppOpen(); return; }
         if (now - sp.getLong("ao_last", 0) < 4 * 3600_000L) return;
         if (now - sp.getLong("rw_last", 0) < 10 * 60_000L) return;
         String today = new SimpleDateFormat("yyyy-MM-dd", Locale.US).format(new Date());
-        if (!today.equals(sp.getString("ao_day", ""))) {
+        if (!today.equals(sp.getString("ao_day", "")))
             sp.edit().putString("ao_day", today).putInt("ao_n", 0).apply();
-        }
         if (sp.getInt("ao_n", 0) >= 3) return;
         sp.edit().putLong("ao_last", now).putInt("ao_n", sp.getInt("ao_n", 0) + 1).apply();
-        AppOpenAd ad = appOpen;
-        appOpen = null;
-        ad.show(this);
+        Object ad = appOpen; appOpen = null;
+        invoke(ad, "show", this);
+        loadAppOpen();
     }
 
     private void loadRewarded() {
-        rewarded = new RewardedAd(this);
-        rewarded.setAdUnitId(REWARDED_ID);
-        rewarded.setAdEventListener(new RewardedAdEventListener() {
-            @Override
-            public void onRewarded(Reward r) {
-                sp.edit().putLong("rw_last", System.currentTimeMillis()).apply();
-                grantAdFree(48);
-            }
-            @Override public void onAdFailedToLoad(AdError e) {}
-            @Override public void onAdDismissed() { loadRewarded(); }
-            @Override public void onAdShown() {}
-            @Override public void onAdClicked() {}
-            @Override public void onAdImpression() {}
-        });
-        rewarded.loadAd(new AdRequest.Builder().build());
+        rewarded = construct(C("com.yandex.mobile.ads.rewarded.RewardedAd"), this);
+        if (rewarded == null) return;
+        invoke(rewarded, "setAdUnitId", REWARDED_ID);
+        Class<?> li = C("com.yandex.mobile.ads.rewarded.RewardedAdEventListener");
+        if (li != null) {
+            Object proxy = Proxy.newProxyInstance(li.getClassLoader(), new Class<?>[]{li},
+                new InvocationHandler() {
+                    @Override public Object invoke(Object p, Method m, Object[] a) {
+                        if ("onRewarded".equals(m.getName())) {
+                            sp.edit().putLong("rw_last", System.currentTimeMillis()).apply();
+                            grantAdFree(48);
+                        }
+                        if ("onAdDismissed".equals(m.getName())) loadRewarded();
+                        return null;
+                    }
+                });
+            invoke(rewarded, "setAdEventListener", proxy);
+        }
+        invoke(rewarded, "loadAd", adRequest());
     }
-
     private void showRewarded() {
-        if (rewarded == null || !rewarded.isLoaded()) {
+        Object loaded = invoke(rewarded, "isLoaded");
+        if (!Boolean.TRUE.equals(loaded)) {
             loadRewarded();
             web.evaluateJavascript("window.kopilkaAdFreeUnavailable()", null);
             return;
         }
-        rewarded.show(this);
+        invoke(rewarded, "show", this);
     }
-
     private void grantAdFree(int hours) {
         sp.edit().putLong("af", System.currentTimeMillis() + hours * 3600_000L).apply();
         removeBanner();
@@ -190,53 +209,32 @@ public class MainActivity extends Activity {
     @Override
     protected void onStart() {
         super.onStart();
-        if (firstResume) {
-            firstResume = false;
-        } else {
-            tryAppOpen();
-        }
+        if (firstResume) firstResume = false; else tryAppOpen();
     }
-
     @Override
     protected void onDestroy() {
-        if (banner != null) banner.destroy();
+        removeBanner();
         web.destroy();
         super.onDestroy();
     }
 
     public class Bridge {
-        @JavascriptInterface
-        public void onAppReady() {
-            runOnUiThread(new Runnable() {
-                @Override public void run() { ensureBanner(); }
-            });
+        @JavascriptInterface public void onAppReady() {
+            runOnUiThread(new Runnable() { @Override public void run() { ensureBanner(); } });
         }
-
-        @JavascriptInterface
-        public void setConsent(final boolean v) {
+        @JavascriptInterface public void setConsent(final boolean v) {
             htmlConsent = v;
             sp.edit().putBoolean("consent", v).apply();
-            runOnUiThread(new Runnable() {
-                @Override public void run() { startAds(); }
-            });
+            runOnUiThread(new Runnable() { @Override public void run() { startAds(); } });
         }
-
-        @JavascriptInterface
-        public void setAdFree(final long ms) {
+        @JavascriptInterface public void setAdFree(final long ms) {
             sp.edit().putLong("af", ms).apply();
-            runOnUiThread(new Runnable() {
-                @Override public void run() {
-                    if (ms > System.currentTimeMillis()) removeBanner();
-                    else ensureBanner();
-                }
-            });
+            runOnUiThread(new Runnable() { @Override public void run() {
+                if (ms > System.currentTimeMillis()) removeBanner(); else ensureBanner();
+            } });
         }
-
-        @JavascriptInterface
-        public void showRewardedAdFree() {
-            runOnUiThread(new Runnable() {
-                @Override public void run() { showRewarded(); }
-            });
+        @JavascriptInterface public void showRewardedAdFree() {
+            runOnUiThread(new Runnable() { @Override public void run() { showRewarded(); } });
         }
     }
-}
+        }
